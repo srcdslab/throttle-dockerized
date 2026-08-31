@@ -5,6 +5,8 @@ services:
     restart: always
     volumes:
       - database:/var/lib/mysql
+    networks:
+      - throttle
     environment:
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: "throttle"
@@ -22,38 +24,48 @@ services:
     image: redis:alpine
     container_name: redis
     restart: always
+    networks:
+      - throttle
 
   throttle:
-    image: ghcr.io/webman/throttle
+    image: ghcr.io/srcdslab/throttle:0.0.1
     container_name: throttle
     restart: always
     depends_on:
       database:
         condition: service_healthy
+    networks:
+      - throttle
     volumes:
       - "./docker/php/php.ini:/usr/local/etc/php/php.ini"
       - "./docker/php/php-fpm.conf:/usr/local/etc/php-fpm.conf"
       - "./docker/php/php-fpm.conf:/etc/php/5.6/fpm/php-fpm.conf"
-      - "./docker/supervisor/supervisord.conf:/etc/supervisor/supervisord.conf"
+      - "./docker/app/config.php:/var/www/throttle/app/config.php"
       - "throttle-files:/var/www/throttle"
-    entrypoint: ["/bin/sh","-c"]
-    command:
-      - |
-        php app/console.php migrations:migrate
-        /usr/bin/supervisord
 
   webserver:
     image: nginx:stable-alpine
     container_name: webserver
     restart: always
-    ports:
-      - "8001:80"
+    # ports:
+    #   - "8001:80"
     depends_on:
       - database
       - throttle
     volumes:
       - "./docker/nginx/conf.d/:/etc/nginx/conf.d/:ro"
       - "throttle-files:/var/www/throttle"
+    networks:
+      - proxy
+      - throttle
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.$SERVICE_NAME-http.entrypoints=insecure
+      - traefik.http.routers.$SERVICE_NAME-http.rule=Host(`throttle.example.com`)
+      - traefik.http.routers.$SERVICE_NAME-https.entrypoints=secure
+      - traefik.http.routers.$SERVICE_NAME-https.rule=Host(`throttle.example.com`)
+      - traefik.http.services.$SERVICE_NAME.loadbalancer.server.port=80
 
   ngrok:
     image: ngrok/ngrok:alpine
@@ -67,7 +79,14 @@ services:
       - "./docker/ngrok/ngrok.yml:/etc/ngrok.yml"
     environment:
       NGROK_CONFIG: "/etc/ngrok.yml"
+    profiles:
+      - ngrok
 
 volumes:
   database:
   throttle-files:
+
+networks:
+  throttle:
+  proxy:
+    external: true
